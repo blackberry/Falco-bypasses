@@ -617,7 +617,7 @@ Some general recommendations and suggestions:
 ---
 
 [^1]: https://man7.org/linux/man-pages/man2/dup2.2.html
-[^2]: https://hub.docker.com/repository/docker/sshayb/fuber
+[^2]: https://hub.docker.com/r/sshayb/fuber
 [^3]: https://github.com/worawit/CVE-2021-3156/blob/main/exploit_nss.py
 [^4]: https://sysdig.com/blog/cve-2021-3156-sudo-falco/
 [^5]: https://falco.org/docs/rules/supported-fields/
