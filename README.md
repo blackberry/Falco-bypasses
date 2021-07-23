@@ -4,14 +4,10 @@ This is a research project that consists of documentation (all in `README.md`) a
 
 The main directory contains the **Dockerfile** for `sshayb/fubers:latest` image used extensively in this project as well as the artifacts needed to successfully build the image. To build the image, run `docker build -t sshayb/fubers:latest .` from the main directory. This will download and copy the necessary binaries and fubers (from /fubers) into the container image based on ubuntu:18.04. The build process copies the binaries under different names and creates symlinks where necessary (see Dockerfile for details) - all this to avoid triggering rules from the moment the container starts. 
 
-**Binaries** are docker and kubectl standalone binaries typically used to facilitate privilege escalation and lateral movement during the cluster compromise. **Fubers** are small bypass snippets written in C and used to demonstrate various bypass techniques: `fuber-openandreadfile` and `systemd-logind` are used in section [Bypass rules via executable naming](#naming), while `fuber-dos` is used in section [A Word on CVE-2019-8339 and Falco Denial of Service](#cve).
+Binaries are docker and kubectl standalone binaries typically used to facilitate privilege escalation and lateral movement during the cluster compromise. **Fubers** are small bypass snippets written in C and used to demonstrate various bypass techniques: `fuber-openandreadfile` and `systemd-logind` are used in section [Bypass rules via executable naming](#naming), while `fuber-dos` is used in section [A Word on CVE-2019-8339 and Falco Denial of Service](#cve).
 
 A separate **folder `CVE-2021-3156`** contains everything needed to build the docker image used to test CVE-2021-3156 vulnerability in section [A special case of "Sudo Potential Privilege Escalation"](#escalation): Dockerfile, exploit POC and a vulnerable sudo package.
 
-
-## Table of Contents
-
-[[_TOC_]]
 
 ## Falco Overview
 Higher abstration levels in Software and DevOps world have multiple advantages: they make software and configuration reuse easier; they facilitate code development and project creation. The price is the visibility. The higher the abstraction level the more difficult it is to monitor, inspect and debug it. Falco was born to solve this problem. As an ultimate "Wireshark" of Kubernetes, it can tell what process was spawned when and correlate this process to the workload on Kubernetes level. Falco's uniqueness is in the way it cuts through the abstraction levels and brings together multiple debug and monitor sources into the parsable and manageable environment.
