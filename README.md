@@ -14,7 +14,7 @@ Higher abstration levels in Software and DevOps world have multiple advantages: 
 
 ### Falco skipped system calls
 
-Before we proceed, we need to understand that because of the sheer volume of system events Falco cannot process all of them. The developers had to make a concious decision to ignore the following system calls, which by itseld an interesting bypass vector:
+Before we proceed, we need to understand that because of the sheer volume of system events Falco cannot process all of them. The developers had to make a concious decision to ignore the following system calls, which by itself is an interesting bypass vector:
 
 ```
 access alarm brk capget clock_getres clock_gettime clock_nanosleep clock_settime close container cpu_hotplug drop epoll_create epoll_create1 epoll_ctl epoll_pwait epoll_wait eventfd eventfd2 exit_group fcntl fcntl64 fdatasync fgetxattr flistxattr fstat fstat64 fstatat64 fstatfs fstatfs64 fsync futex get_robust_list get_thread_area getcpu getcwd getdents getdents64 getegid geteuid getgid getgroups getitimer getpeername getpgid getpgrp getpid getppid getpriority getresgid getresuid getrlimit getrusage getsid getsockname getsockopt gettid gettimeofday getuid getxattr infra io_cancel io_destroy io_getevents io_setup io_submit ioprio_get ioprio_set k8s lgetxattr listxattr llistxattr llseek lseek lstat lstat64 madvise mesos mincore mlock mlockall mmap mmap2 mprotect mq_getsetattr mq_notify mq_timedreceive mq_timedsend mremap msgget msgrcv msgsnd munlock munlockall munmap nanosleep newfstatat newselect notification olduname page_fault pause poll ppoll pread pread64 preadv procinfo pselect6 pwrite pwrite64 pwritev read readv recv recvmmsg remap_file_pages rt_sigaction rt_sigpending rt_sigprocmask rt_sigsuspend rt_sigtimedwait sched_get_priority_max sched_get_priority_min sched_getaffinity sched_getparam sched_getscheduler sched_yield select semctl semget semop send sendfile sendfile64 sendmmsg setitimer setresgid setrlimit settimeofday sgetmask shutdown signaldeliver signalfd signalfd4 sigpending sigprocmask sigreturn splice stat stat64 statfs statfs64 switch sysdigevent tee time timer_create timer_delete timer_getoverrun timer_gettime timer_settime timerfd_create timerfd_gettime timerfd_settime times ugetrlimit umask uname ustat vmsplice wait4 waitid waitpid write writev
@@ -25,7 +25,7 @@ Every Falco rule must have an associated priority. According to Falco [documenta
 
 ## Previous Work on Falco Bypasses
 This is not the first work on Falco bypasses. There were several projects before that focused on different bypass vectors:
-- Sep 2019 - by [NCC Group](https://www.antitree.com/2019/09/container-runtime-security-bypasses-on-falco/) - focused on image names maniulations to leverage Falco rules allow-lists.
+- Sep 2019 - by [NCC Group](https://www.antitree.com/2019/09/container-runtime-security-bypasses-on-falco/) - focused on image name maniulations to leverage Falco rules allow-lists.
 - August 2020 - by [Brad Geesaman](https://darkbit.io/blog/falco-rule-bypass) - similar to previous work, exploited weak image name comparison logic to leverage Falco rules allow-lists.
 - Nov 2020 - by [Leonardo Di Donato](https://www.youtube.com/watch?v=nGqWskXRSmo) - exploited twin syscalls that Falco missed, suggested other ideas used in this report.
 - June 2019 and ongoing - by [maintainers](https://github.com/falcosecurity/falco/issues/676) - ongoing issue handling the missing sister calls
@@ -68,7 +68,7 @@ root:*:18291:0:99999:7:::
 [Falco]
 SILENCE
 ```
-The success of this bypass is conditioned on the ability to create symlink to the non-monitored subdirectory within the sensitive directory. The described symlink bypass techniques can be a lego pieces in bypassing other rules.
+The success of this bypass is conditioned on the ability to create a symlink to the non-monitored subdirectory within the sensitive directory. The described symlink bypass techniques can be a lego pieces in bypassing other rules.
 
 Similarly, we can bypass **Write below etc**, **Write below root** and other write detection rules that rely on directory path comparison:
 ```
@@ -126,7 +126,7 @@ strace: Process 16670 attached
 [pid 16670] execve("/usr/bin/id", ["id"], ["PWD=/home/g00fb4ll"]) = 0
 [pid 16670] +++ exited with 0 +++
 ```
-We can see from the line `execve("/usr/bin/sudo"...` that all the rule conditions are met (in fact, if we run `sudoedit -A -s ...` manually the rule triggers as expected). Digging deeper we see the discrepancy between the execve pathname and _argv[0]_. This only works because on the ubuntu base images _sudoedit_ is in fact a symlink to _sudo_. While _proc.name_ is parsed from the execve pathname (as per documentation[^5]: "the name (excluding the path) of the executable generating the event"), the rule censors _sudoedit_ process name. This discrepancy results in the rule not triggering with underlying problem being the rule not considering the censored process name being a symlink. I recommend changing the rule to capture two possible process names and audit other rules that use symlinks in _proc.name_ conditions.
+We can see from the line `execve("/usr/bin/sudo"...` that all the rule conditions are met (in fact, if we run `sudoedit -A -s ...` manually the rule triggers as expected). Digging deeper we see the discrepancy between the execve pathname and _argv[0]_. This only works because on the ubuntu base images _sudoedit_ is in fact a symlink to _sudo_. While _proc.name_ is parsed from the execve pathname (as per documentation[^5]: "the name (excluding the path) of the executable generating the event"), the rule censors _sudoedit_ process name. This discrepancy results in the rule not triggering with the underlying problem being the rule not considering the censored process name being a symlink. I recommend changing the rule to capture two possible process names and audit other rules that use symlinks in _proc.name_ conditions.
 
 ### <a name="naming"></a>Bypass rules via executable naming
 
@@ -323,7 +323,7 @@ hostname
 ```
 Even though Falco emits two events, the first rule is different now, which means we successfully bypassed **Netcat Remote Code Execution in Container**. Rule **Launch Suspicious Network Tool in Container** is of NOTICE priority (detection downgrade), relies on _proc.name_ comparison in `network_tool_binaries` list, and is therefore bypassable through traditional means. Among other things, this exercise points on Falco's correct logic to report the higher-priority event if multiple rules trigger as a result of the same call. But in the context of this discussion the more important point is having another evasion technique on hands through collation of the command line arguments.
 
-To understand how common is the usage of command line parameters in the default ruleset and whether we can use this technique to evade other rules we search for _proc.args_ constructs. There are four other rules that use _proc.args_ command in a meaningful way:
+To understand how common the usage of command line parameters in the default ruleset is and whether we can use this technique to evade other rules we search for _proc.args_ constructs. There are four other rules that use _proc.args_ command in a meaningful way:
 1. **Search Private Keys or Passwords**
 2. **Delete Bash History** (deprecated)
 3. **Sudo Potential Privilege Escalation**
